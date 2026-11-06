@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "2",
+  "title": "T06 Planning and Reflection Data Contract",
+  "description": "SQLite table contract. All timestamps are UTC ISO 8601 strings ending in Z. Calendar dates are Seoul-local date strings.",
+  "timezone": {
+    "calendar_dates": "Asia/Seoul",
+    "timestamps_storage": "UTC",
+    "timestamps_display": "Asia/Seoul",
+    "date_format": "YYYY-MM-DD",
+    "timestamp_format": "ISO 8601 UTC",
+    "duration_unit": "minutes",
+    "overdue_rule": "A task is overdue when status is todo and due_date is earlier than today's Asia/Seoul calendar date. A completed task is never counted overdue."
+  },
+  "tables": {
+    "plans": {
+      "primary_key": ["id"],
+      "columns": {
+        "id": {"type":"TEXT","required":true,"format":"UUID"},
+        "title": {"type":"TEXT","required":true,"max_length":160},
+        "start_date": {"type":"TEXT","required":true,"format":"YYYY-MM-DD","timezone":"Asia/Seoul"},
+        "end_date": {"type":"TEXT","required":true,"format":"YYYY-MM-DD","timezone":"Asia/Seoul","constraint":"end_date >= start_date"},
+        "priority": {"type":"INTEGER","required":true,"minimum":1,"maximum":5},
+        "success_criteria": {"type":"TEXT","required":true,"max_length":2000},
+        "estimated_minutes": {"type":"INTEGER","required":true,"minimum":0,"unit":"minutes"},
+        "created_at": {"type":"TEXT","required":true,"format":"ISO-8601-UTC"},
+        "updated_at": {"type":"TEXT","required":true,"format":"ISO-8601-UTC"}
+      }
+    },
+    "plan_revisions": {
+      "primary_key": ["id"],
+      "unique": [["plan_id","revision_no"]],
+      "foreign_keys": [{"columns":["plan_id"],"references":"plans.id","on_delete":"RESTRICT"}],
+      "columns": {
+        "id":{"type":"TEXT","required":true,"format":"UUID"},
+        "plan_id":{"type":"TEXT","required":true},
+        "revision_no":{"type":"INTEGER","required":true,"minimum":1},
+        "snapshot_json":{"type":"TEXT","required":true,"description":"Immutable full plan snapshot immediately before an update."},
+        "recorded_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC"}
+      }
+    },
+    "tasks": {
+      "primary_key": ["id"],
+      "foreign_keys": [{"columns":["plan_id"],"references":"plans.id","on_delete":"RESTRICT"}],
+      "columns": {
+        "id":{"type":"TEXT","required":true,"format":"UUID"},
+        "plan_id":{"type":"TEXT","required":true},
+        "title":{"type":"TEXT","required":true,"max_length":240},
+        "description":{"type":"TEXT","required":true,"max_length":4000,"default":""},
+        "due_date":{"type":"TEXT","required":true,"format":"YYYY-MM-DD or empty string","timezone":"Asia/Seoul","default":""},
+        "priority":{"type":"INTEGER","required":true,"minimum":1,"maximum":5},
+        "tags_json":{"type":"TEXT","required":true,"format":"JSON array of strings","maximum_items":20},
+        "estimated_minutes":{"type":"INTEGER","required":true,"minimum":0,"unit":"minutes"},
+        "status":{"type":"TEXT","required":true,"enum":["todo","done"]},
+        "created_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC"},
+        "updated_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC"},
+        "deleted_at":{"type":"TEXT","required":false,"format":"ISO-8601-UTC or null","description":"Soft deletion. Deleted tasks are excluded from lists and review calculations."}
+      }
+    },
+    "execution_records": {
+      "primary_key": ["id"],
+      "unique": [["idempotency_key"]],
+      "foreign_keys": [{"columns":["task_id"],"references":"tasks.id","on_delete":"RESTRICT"}],
+      "columns": {
+        "id":{"type":"TEXT","required":true,"format":"UUID"},
+        "task_id":{"type":"TEXT","required":true},
+        "started_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC"},
+        "ended_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC","constraint":"ended_at >= started_at"},
+        "actual_minutes":{"type":"INTEGER","required":true,"minimum":0,"unit":"minutes"},
+        "blocker_reason":{"type":"TEXT","required":true,"max_length":2000,"default":""},
+        "idempotency_key":{"type":"TEXT","required":true,"unique":true},
+        "created_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC"}
+      }
+    },
+    "plan_handoffs": {
+      "primary_key": ["id"],
+      "foreign_keys": [
+        {"columns":["source_plan_id"],"references":"plans.id","on_delete":"RESTRICT"},
+        {"columns":["target_plan_id"],"references":"plans.id","on_delete":"RESTRICT"}
+      ],
+      "columns": {
+        "id":{"type":"TEXT","required":true,"format":"UUID"},
+        "source_plan_id":{"type":"TEXT","required":true},
+        "target_plan_id":{"type":"TEXT","required":true,"constraint":"Must differ from source_plan_id."},
+        "insight_text":{"type":"TEXT","required":true,"max_length":1000},
+        "created_at":{"type":"TEXT","required":true,"format":"ISO-8601-UTC"}
+      }
+    }
+  },
+  "review_calculations": {
+    "cohort": "Tasks whose non-deleted parent plan overlaps the selected date range (plan.start_date <= range.to and plan.end_date >= range.from).",
+    "task_count": "Count of cohort tasks, equivalent to non-deleted tasks attached to the matching plans.",
+    "completed_count": "Count of cohort tasks where current status is done.",
+    "overdue_count": "Count of cohort tasks where current status is todo and due_date is non-empty and earlier than Asia/Seoul today.",
+    "blocked_count": "Count of distinct cohort tasks with at least one execution record whose blocker_reason is non-empty after trimming.",
+    "estimated_minutes": "Sum of estimated_minutes for cohort tasks.",
+    "actual_minutes": "Sum of actual_minutes for all execution records attached to cohort tasks.",
+    "difference_minutes": "actual_minutes - estimated_minutes; unit minutes; empty sums are zero.",
+    "completion_idempotency": "Each completion attempt has a UUID idempotency key that is unique in execution_records. Status change and record insertion happen in one SQLite transaction. A retry with the same key or a repeated request while the task is already done does not add a second record. After reverting the task to todo, a later intentional completion uses a new key."
+  }
+}
